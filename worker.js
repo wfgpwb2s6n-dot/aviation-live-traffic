@@ -1,18 +1,18 @@
 const CENTER = { lat: 45.0781, lon: -83.5603 };
-const FRESH_TTL = 15;
+const FRESH_TTL = 8;
 const STALE_TTL = 300;
 
 const SOURCES = [
   {
-    name: "airplanes.live",
-    url: (lat, lon, radius) =>
-      `https://api.airplanes.live/v2/point/${lat}/${lon}/${radius}`,
-    rows: (data) => Array.isArray(data.ac) ? data.ac : []
-  },
-  {
     name: "adsb.lol",
     url: (lat, lon, radius) =>
       `https://api.adsb.lol/v2/point/${lat}/${lon}/${radius}`,
+    rows: (data) => Array.isArray(data.ac) ? data.ac : []
+  },
+  {
+    name: "airplanes.live",
+    url: (lat, lon, radius) =>
+      `https://api.airplanes.live/v2/point/${lat}/${lon}/${radius}`,
     rows: (data) => Array.isArray(data.ac) ? data.ac : []
   },
   {
@@ -72,7 +72,7 @@ async function fetchWithTimeout(url, timeoutMs = 3500) {
     return await fetch(url, {
       headers: {
         "accept": "application/json",
-        "user-agent": "AviationLiveTraffic/1.4 home-office-hangar-display"
+        "user-agent": "AviationLiveTraffic/1.5 home-office-hangar-display"
       },
       signal: controller.signal
     });
@@ -97,7 +97,8 @@ async function trySource(source, lat, lon, radius) {
     center: { lat, lon, radiusNm: radius },
     total: aircraft.length,
     aircraft,
-    stale: false
+    stale: false,
+    cached: false
   };
 }
 
@@ -106,17 +107,20 @@ async function traffic(request, ctx) {
   const lat = clampNumber(u.searchParams.get("lat"), -90, 90, CENTER.lat);
   const lon = clampNumber(u.searchParams.get("lon"), -180, 180, CENTER.lon);
   const radius = Math.round(clampNumber(u.searchParams.get("radius"), 5, 250, 100));
+  const force = u.searchParams.get("force") === "1";
 
   const cache = caches.default;
   const cacheBase = `${u.origin}/__traffic_cache/${lat.toFixed(4)}/${lon.toFixed(4)}/${radius}`;
   const freshKey = new Request(`${cacheBase}/fresh`);
   const staleKey = new Request(`${cacheBase}/stale`);
 
-  const fresh = await cache.match(freshKey);
-  if (fresh) {
-    const payload = await fresh.json();
-    payload.cached = true;
-    return json(payload);
+  if (!force) {
+    const fresh = await cache.match(freshKey);
+    if (fresh) {
+      const payload = await fresh.json();
+      payload.cached = true;
+      return json(payload);
+    }
   }
 
   const errors = [];
@@ -205,7 +209,7 @@ button{cursor:pointer}.control-spacer{flex:1}
 
 .plane{cursor:pointer}.plane-label{paint-order:stroke;stroke:#07111b;stroke-width:4px;stroke-linejoin:round;font-weight:800}
 .plane-sub{paint-order:stroke;stroke:#07111b;stroke-width:3px;stroke-linejoin:round;font-weight:700}
-.vector{stroke:#8bc5df;stroke-width:1.4;opacity:.72}.trail{fill:none;stroke:#6fd7ff;stroke-width:1.4;opacity:.32}
+.vector{stroke:#8bc5df;stroke-width:1.4;opacity:.72}.trail{fill:none;stroke:#58b8e6;stroke-width:2.2;opacity:.62;stroke-linecap:round;stroke-linejoin:round}.trail-dot{fill:#58b8e6;opacity:.72}
 .selected-ring{fill:none;stroke:var(--select);stroke-width:2.5;opacity:.9}
 
 .detail{position:absolute;right:12px;bottom:12px;width:min(410px,calc(100% - 24px));background:#0d1925f5;border:1px solid var(--line);
@@ -277,7 +281,8 @@ button{cursor:pointer}.control-spacer{flex:1}
   <div class="hudbar">
     <strong id="count">—</strong><span>AIRCRAFT</span><span class="hudsep">|</span>
     <strong id="rangeHud">100</strong><span>NM</span><span class="hudsep">|</span>
-    <strong id="ageHud">—</strong><span>DATA AGE</span>
+    <strong id="ageHud">—</strong><span>DATA AGE</span><span class="hudsep">|</span>
+    <strong id="trailHud">OFF</strong><span>TRAIL</span>
   </div>
   <div class="legend">Click an aircraft for details</div>
 
@@ -307,16 +312,17 @@ button{cursor:pointer}.control-spacer{flex:1}
 <script>
 (()=>{
 "use strict";
-const CENTER={lat:45.0781,lon:-83.5603},POLL=20000,NS="http://www.w3.org/2000/svg";
+const CENTER={lat:45.0781,lon:-83.5603},POLL=15000,NS="http://www.w3.org/2000/svg";
 const $=id=>document.getElementById(id);
 const grid=$("grid"),planes=$("planes"),trailsLayer=$("trailsLayer"),notice=$("notice"),detail=$("detail");
 const controls={
   range:$("range"),labels:$("labels"),trails:$("trails"),traffic:$("trafficFilter"),alt:$("altFilter")
 };
 
-let last=[],timer=null,busy=false,everLive=false,lastGoodAt=0,selectedHex=null;
+let last=[],timer=null,busy=false,everLive=false,lastGoodAt=0,selectedHex=null,lastPayloadTime=0;
 const history=new Map();
-const prefsKey="aviationLiveTrafficPrefsV14";
+const prefsKey="aviationLiveTrafficPrefsV15";
+const historyKey="aviationLiveTrafficHistoryV15";
 
 function S(tag,a={},t=null){const n=document.createElementNS(NS,tag);Object.entries(a).forEach(([k,v])=>n.setAttribute(k,String(v)));if(t!==null)n.textContent=t;return n}
 function status(kind,text){$("dot").className="dot"+(kind?" "+kind:"");$("status").textContent=text}
@@ -351,6 +357,31 @@ function loadPrefs(){
     if(p.range)controls.range.value=p.range;if(p.labels)controls.labels.value=p.labels;
     if(p.trails)controls.trails.value=p.trails;if(p.traffic)controls.traffic.value=p.traffic;
     if(p.alt)controls.alt.value=p.alt;
+  }catch{}
+}
+
+
+function loadHistory(){
+  try{
+    const raw=JSON.parse(localStorage.getItem(historyKey)||"{}");
+    const cutoff=Date.now()-310000;
+    for(const [hex,pts] of Object.entries(raw)){
+      if(!Array.isArray(pts))continue;
+      const clean=pts.filter(p=>p&&Number.isFinite(Number(p.t))&&Number.isFinite(Number(p.lat))&&Number.isFinite(Number(p.lon))&&Number(p.t)>=cutoff)
+        .map(p=>({t:Number(p.t),lat:Number(p.lat),lon:Number(p.lon)}));
+      if(clean.length)history.set(hex,clean);
+    }
+  }catch{}
+}
+function saveHistory(){
+  try{
+    const out={};
+    const cutoff=Date.now()-310000;
+    for(const [hex,pts] of history){
+      const clean=pts.filter(p=>p.t>=cutoff).slice(-30);
+      if(clean.length)out[hex]=clean;
+    }
+    localStorage.setItem(historyKey,JSON.stringify(out));
   }catch{}
 }
 
@@ -392,8 +423,8 @@ function showDetail(a){
   detail.style.display="block";draw(last);
 }
 
-function addHistory(list){
-  const now=Date.now();
+function addHistory(list,timestampMs){
+  const now=Number.isFinite(Number(timestampMs))?Number(timestampMs):Date.now();
   for(const a of list){
     if(!a.hex||!Number.isFinite(Number(a.lat))||!Number.isFinite(Number(a.lon)))continue;
     const arr=history.get(a.hex)||[];
@@ -404,6 +435,7 @@ function addHistory(list){
     while(arr.length&&now-arr[0].t>310000)arr.shift();
     history.set(a.hex,arr);
   }
+  saveHistory();
 }
 
 function radarXY(lat,lon,maxNm){
@@ -416,17 +448,25 @@ function rectOverlap(a,b,pad=3){return !(a.x2+pad<b.x1||a.x1-pad>b.x2||a.y2+pad<
 
 function drawTrails(maxNm){
   trailsLayer.replaceChildren();
-  const seconds=Number(controls.trails.value)||0;if(!seconds)return;
+  const seconds=Number(controls.trails.value)||0;
+  if(!seconds){$("trailHud").textContent="OFF";return}
   const cutoff=Date.now()-seconds*1000;
+  let tracks=0,maxPoints=0;
   for(const a of last){
     if(!matchesFilters(a)||!a.hex)continue;
     const arr=(history.get(a.hex)||[]).filter(p=>p.t>=cutoff);
+    maxPoints=Math.max(maxPoints,arr.length);
     if(arr.length<2)continue;
     const pts=arr.map(p=>radarXY(p.lat,p.lon,maxNm)).filter(p=>p.d<=maxNm);
     if(pts.length<2)continue;
     const d=pts.map((p,i)=>(i?"L":"M")+p.x.toFixed(1)+" "+p.y.toFixed(1)).join(" ");
-    trailsLayer.append(S("path",{d,class:"trail",opacity:a.hex===selectedHex?.75:.3}));
+    trailsLayer.append(S("path",{d,class:"trail",opacity:a.hex===selectedHex?.9:.62}));
+    for(const pt of pts.slice(0,-1)){
+      trailsLayer.append(S("circle",{cx:pt.x.toFixed(1),cy:pt.y.toFixed(1),r:1.8,class:"trail-dot"}));
+    }
+    tracks++;
   }
+  $("trailHud").textContent=tracks?tracks+" TRACKS":(maxPoints?"BUILDING":"WAITING");
 }
 
 function draw(list){
@@ -497,25 +537,38 @@ function updateAgeHud(){
   $("ageHud").textContent=s+"s";
 }
 
-async function load(){
-  if(busy)return;busy=true;
+async function load(force=false){
+  if(busy)return false;
+  busy=true;
+  const btn=$("refresh"),oldText=btn.textContent;
+  if(force){btn.disabled=true;btn.textContent="Refreshing…"}
   status("",everLive?"Updating…":"Connecting…");notice.style.display="none";
   const r=Number(controls.range.value)||100;
+  const before=lastPayloadTime;
+  let gotNew=false;
   try{
-    const res=await fetch("/api/traffic?lat="+CENTER.lat+"&lon="+CENTER.lon+"&radius="+r,{cache:"no-store"});
+    const url="/api/traffic?lat="+CENTER.lat+"&lon="+CENTER.lon+"&radius="+r+(force?"&force=1&_="+Date.now():"");
+    const res=await fetch(url,{cache:"no-store"});
     const data=await res.json();
     if(!res.ok)throw new Error((data.errors||[]).join(" | ")||data.error||"HTTP "+res.status);
     last=Array.isArray(data.aircraft)?data.aircraft:[];
-    addHistory(last);draw(last);everLive=true;
-    lastGoodAt=Date.now();
+    const payloadTime=Date.parse(data.generatedAt||"")||Date.now();
+    lastPayloadTime=payloadTime;
+    gotNew=payloadTime>before;
+    if(!data.stale)addHistory(last,payloadTime);
+    draw(last);everLive=true;
+    lastGoodAt=payloadTime;
     $("source").textContent="Data: "+(data.source||"community ADS-B");
     if(data.stale){
       status("","Holding last good data");
       notice.className="notice";notice.textContent="A live refresh was missed. Keeping the last good aircraft positions.";notice.style.display="block"
-    }else status("good","Live · "+(data.source||"ADS-B"));
-    if(selectedHex){
-      const s=last.find(a=>a.hex===selectedHex);if(s)showDetail(s)
+    }else{
+      status("good","Live · "+(data.source||"ADS-B"));
     }
+    if(selectedHex){
+      const selected=last.find(a=>a.hex===selectedHex);if(selected)showDetail(selected)
+    }
+    return gotNew;
   }catch(e){
     if(everLive&&last.length){
       draw(last);status("","Holding last good data");
@@ -524,7 +577,14 @@ async function load(){
       status("bad","Waiting for feed");notice.className="notice fatal";
       notice.textContent="No aircraft feed has connected yet. "+e.message;notice.style.display="block"
     }
-  }finally{busy=false;updateAgeHud()}
+    return false;
+  }finally{
+    busy=false;updateAgeHud();
+    if(force){
+      btn.textContent=gotNew?"Updated":"No new data";
+      setTimeout(()=>{btn.disabled=false;btn.textContent=oldText},900);
+    }
+  }
 }
 
 function redrawAndSave(){savePrefs();drawGrid();draw(last)}
@@ -532,11 +592,11 @@ function restart(){clearInterval(timer);redrawAndSave();load();timer=setInterval
 
 controls.range.addEventListener("change",restart);
 [controls.labels,controls.trails,controls.traffic,controls.alt].forEach(c=>c.addEventListener("change",redrawAndSave));
-$("refresh").addEventListener("click",load);
+$("refresh").addEventListener("click",()=>load(true));
 $("close").addEventListener("click",()=>{detail.style.display="none";selectedHex=null;draw(last)});
 document.addEventListener("visibilitychange",()=>{if(document.hidden)clearInterval(timer);else restart()});
 
-loadPrefs();drawGrid();restart();
+loadPrefs();loadHistory();drawGrid();restart();
 setInterval(updateAgeHud,1000);
 })();
 </script>
@@ -551,7 +611,7 @@ export default {
     }
 
     if (url.pathname === "/api/health") {
-      return json({ ok: true, version: "1.4", time: new Date().toISOString() });
+      return json({ ok: true, version: "1.5", time: new Date().toISOString() });
     }
 
     return new Response(PAGE, {
