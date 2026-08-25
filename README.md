@@ -1,51 +1,40 @@
-# Aviation Live Traffic — Cloudflare Version
+# Aviation Live Traffic V1.1 — Cloudflare
 
-This version is designed so the computer displaying the app does **not** need Node.js or administrator rights.
+This release fixes the two problems seen in the first live deployment.
 
-## Architecture
+## Changes
 
-Browser / iPad / TV
-→ Cloudflare Worker
-→ ADSB.lol
-→ live aircraft data
+1. The backend now tries three free aircraft-data sources in order:
+   - ADSB.lol
+   - airplanes.live
+   - adsb.fi
 
-Cloudflare also serves the HTML, CSS and JavaScript in the `public` folder.
+   If one provider is temporarily unavailable or rejects the Cloudflare request, the next provider is tried automatically.
 
-## Recommended deployment method when you cannot install software
+2. The map now uses CARTO's dark OpenStreetMap-based tiles instead of the original OpenStreetMap tile server.
 
-Use GitHub + Cloudflare's web dashboards:
+3. Added `/api/health` so we can verify that the Cloudflare Worker itself is running.
 
-1. Create a free GitHub repository.
-2. Upload all files from this project to that repository using GitHub's browser upload.
-3. In Cloudflare, create a Workers project connected to that GitHub repository.
-4. Set the deploy command to:
+4. The status indicator now shows which aircraft provider is currently supplying traffic.
 
-       npx wrangler deploy
+## Updating the existing deployment
 
-5. Cloudflare's build system installs Wrangler and deploys the project for you. Nothing needs to be installed on your work computer.
-6. Cloudflare will give you a public `*.workers.dev` URL.
-7. Open that URL on your iPad, TV browser, office computer, or hangar display.
+You do NOT need to make another Cloudflare project.
 
-## Files
+Replace the files in your existing GitHub repository with the files from this V1.1 folder.
 
-- `worker.js` — serverless ADS-B proxy.
-- `wrangler.jsonc` — Cloudflare Worker/static-assets configuration.
-- `package.json` — tells Cloudflare's build environment which deployment tool to use.
-- `public/` — the flight-tracker web interface.
+Cloudflare's Git integration should detect the new commit automatically and redeploy the same workers.dev URL.
 
-## Default center
+The key files changed are:
 
-The current V1 center is Alpena / KAPN:
+- `worker.js`
+- `public/app.js`
+- `README.md`
 
-- 45.0781 N
-- 83.5603 W
+## Default area
 
-The center can be made user-configurable in the next version.
-
-## No API key
-
-ADSB.lol currently exposes the endpoint used by this prototype without an API key. This is a community service, so access policies can change.
+Alpena / KAPN, 100 NM.
 
 ## Safety
 
-This is a home/office/hangar enthusiast display. It is not intended as an aviation safety, navigation, or collision-avoidance system.
+This is a home/office/hangar enthusiast display only.
