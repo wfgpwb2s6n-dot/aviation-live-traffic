@@ -1,26 +1,15 @@
 const CENTER = { lat: 45.0781, lon: -83.5603 };
-const FRESH_TTL = 30;
+const FRESH_TTL = 20;
 const STALE_TTL = 600;
 
 const SOURCES = [
   {
-    name: "adsb.one",
-    url: (lat, lon, radius) =>
-      `https://api.adsb.one/v2/point/${lat}/${lon}/${radius}`,
-    rows: (data) => Array.isArray(data.ac) ? data.ac : []
+    name: "theairtraffic",
+    url: "https://globe.theairtraffic.com/data/aircraft.json"
   },
   {
-    name: "adsb.lol",
-    url: (lat, lon, radius) =>
-      `https://api.adsb.lol/v2/point/${lat}/${lon}/${radius}`,
-    rows: (data) => Array.isArray(data.ac) ? data.ac : []
-  },
-  {
-    name: "adsb.fi",
-    url: (lat, lon, radius) =>
-      `https://opendata.adsb.fi/api/v3/lat/${lat}/lon/${lon}/dist/${radius}`,
-    rows: (data) => Array.isArray(data.aircraft) ? data.aircraft :
-                    Array.isArray(data.ac) ? data.ac : []
+    name: "hpradar",
+    url: "https://skylink.hpradar.com/data/aircraft.json"
   }
 ];
 
@@ -52,11 +41,11 @@ function normalize(a) {
     ownOp: a.ownOp ?? null,
     lat: Number.isFinite(lat) ? lat : null,
     lon: Number.isFinite(lon) ? lon : null,
-    alt_baro: a.alt_baro ?? null,
+    alt_baro: a.alt_baro ?? a.altitude ?? null,
     alt_geom: a.alt_geom ?? null,
-    gs: a.gs ?? null,
+    gs: a.gs ?? a.speed ?? null,
     track: a.track ?? null,
-    baro_rate: a.baro_rate ?? a.geom_rate ?? null,
+    baro_rate: a.baro_rate ?? a.vert_rate ?? a.geom_rate ?? null,
     squawk: a.squawk ?? null,
     emergency: a.emergency ?? null,
     category: a.category ?? null,
@@ -65,14 +54,14 @@ function normalize(a) {
   };
 }
 
-async function fetchWithTimeout(url, timeoutMs = 8000) {
+async function fetchWithTimeout(url, timeoutMs = 10000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, {
       headers: {
         "accept": "application/json",
-        "user-agent": "AviationLiveTraffic/1.8 home-office-hangar-display"
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36 AviationLiveTraffic/1.9"
       },
       signal: controller.signal
     });
@@ -81,22 +70,46 @@ async function fetchWithTimeout(url, timeoutMs = 8000) {
   }
 }
 
+
+function distanceNm(lat1, lon1, lat2, lon2) {
+  const R = 3440.065;
+  const toRad = d => d * Math.PI / 180;
+  const p1 = toRad(lat1);
+  const p2 = toRad(lat2);
+  const dp = toRad(lat2 - lat1);
+  const dl = toRad(lon2 - lon1);
+  const h = Math.sin(dp / 2) ** 2 +
+            Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
 async function trySource(source, lat, lon, radius) {
-  const response = await fetchWithTimeout(source.url(lat, lon, radius));
+  const response = await fetchWithTimeout(source.url);
   if (!response.ok) {
     const retry = response.headers.get("retry-after");
     throw new Error(`${source.name} HTTP ${response.status}${retry ? ` retry-after=${retry}` : ""}`);
   }
 
-  const data = await response.json();
-  const rows = source.rows(data);
+  const raw = await response.json();
+  const rows = Array.isArray(raw.aircraft) ? raw.aircraft :
+               Array.isArray(raw.ac) ? raw.ac : [];
+
   const aircraft = rows
     .map(normalize)
-    .filter(a => Number.isFinite(a.lat) && Number.isFinite(a.lon));
+    .filter(a =>
+      Number.isFinite(a.lat) &&
+      Number.isFinite(a.lon) &&
+      distanceNm(lat, lon, a.lat, a.lon) <= radius
+    );
+
+  const upstreamNow = Number(raw.now);
+  const generatedAt = Number.isFinite(upstreamNow)
+    ? new Date(upstreamNow * 1000).toISOString()
+    : new Date().toISOString();
 
   return {
     source: source.name,
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     center: { lat, lon, radiusNm: radius },
     total: aircraft.length,
     aircraft,
@@ -307,13 +320,13 @@ button{cursor:pointer}.control-spacer{flex:1}
   </aside>
 </section>
 
-<footer class="footer"><span id="source">ADSB One primary · community fallbacks</span><span>Home/office/hangar display — not for navigation or collision avoidance</span></footer>
+<footer class="footer"><span id="source">TheAirTraffic primary · HPRadar fallback</span><span>Home/office/hangar display — not for navigation or collision avoidance</span></footer>
 </main>
 
 <script>
 (()=>{
 "use strict";
-const CENTER={lat:45.0781,lon:-83.5603},POLL=30000,NS="http://www.w3.org/2000/svg";
+const CENTER={lat:45.0781,lon:-83.5603},POLL=20000,NS="http://www.w3.org/2000/svg";
 const $=id=>document.getElementById(id);
 const grid=$("grid"),planes=$("planes"),trailsLayer=$("trailsLayer"),notice=$("notice"),detail=$("detail");
 const controls={
@@ -543,7 +556,7 @@ async function load(force=false){
   busy=true;
   const btn=$("refresh"),oldText=btn.textContent;
   if(force){btn.disabled=true;btn.textContent="Checking…"}
-  status("",everLive?"Checking…":"Connecting…");notice.style.display="none";
+  status("",everLive?"Updating…":"Connecting…");notice.style.display="none";
   const r=Number(controls.range.value)||100;
   const before=lastPayloadTime;
   let gotNew=false;
@@ -583,7 +596,7 @@ async function load(force=false){
     busy=false;updateAgeHud();
     if(force){
       btn.textContent=gotNew?"Updated":"Checked";
-      setTimeout(()=>{btn.disabled=false;btn.textContent=oldText},1000);
+      setTimeout(()=>{btn.disabled=false;btn.textContent=oldText},900);
     }
   }
 }
@@ -614,11 +627,37 @@ export default {
     if (url.pathname === "/api/health") {
       return json({
         ok: true,
-        version: "1.8",
-        architecture: "cloudflare-proxy-cached",
-        primary: "adsb.one",
+        version: "1.9",
+        architecture: "cloudflare-proxy-global-mirror",
+        primary: "theairtraffic",
+        fallback: "hpradar",
         time: new Date().toISOString()
       });
+    }
+
+    if (url.pathname === "/api/source-test") {
+      const results = [];
+      for (const source of SOURCES) {
+        const started = Date.now();
+        try {
+          const response = await fetchWithTimeout(source.url, 10000);
+          results.push({
+            source: source.name,
+            status: response.status,
+            ok: response.ok,
+            ms: Date.now() - started,
+            contentType: response.headers.get("content-type")
+          });
+        } catch (error) {
+          results.push({
+            source: source.name,
+            ok: false,
+            ms: Date.now() - started,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+      return json({ version: "1.9", results, time: new Date().toISOString() });
     }
 
     return new Response(PAGE, {
