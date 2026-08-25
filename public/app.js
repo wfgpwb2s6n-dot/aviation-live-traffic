@@ -6,9 +6,10 @@ const map = L.map("map", {
   attributionControl: true
 }).setView([DEFAULT_CENTER.lat, DEFAULT_CENTER.lon], 7);
 
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 18,
-  attribution: "&copy; OpenStreetMap contributors"
+L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+  subdomains: "abcd",
+  maxZoom: 20,
+  attribution: "&copy; OpenStreetMap contributors &copy; CARTO"
 }).addTo(map);
 
 const ui = {
@@ -209,7 +210,7 @@ async function fetchTraffic() {
     renderAircraft(Array.isArray(data.aircraft) ? data.aircraft : []);
     const when = new Date(data.generatedAt);
     ui.updated.textContent = when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
-    setStatus("good", data.cached ? "Live · cached" : "Live");
+    setStatus("good", `Live · ${data.source || "traffic feed"}`);
   } catch (error) {
     console.error(error);
     setStatus("bad", "Feed unavailable");
