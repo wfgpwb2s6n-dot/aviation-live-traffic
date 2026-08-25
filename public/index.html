@@ -4,88 +4,371 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#0b1118">
-  <title>Live Traffic</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    integrity="sha256-p4NxAoJBhIINfQ3ynxNVZqWjMZhhpNHPXwTlCzK91zM=" crossorigin="">
-  <link rel="stylesheet" href="/styles.css">
+  <meta name="theme-color" content="#08111b">
+  <title>Aviation Live Traffic</title>
+  <style>
+    :root{
+      color-scheme:dark;
+      --bg:#08111b;--panel:#0e1a27;--panel2:#132235;--line:#263a50;
+      --text:#f4f7fb;--muted:#92a5b9;--accent:#70d6ff;--good:#64e08b;
+      --bad:#ff6f77;--warn:#ffd166;--radar:#13293a;--ring:#36536c;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);
+      font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    button,select{font:inherit}
+    .app{min-height:100dvh;padding:max(12px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right))
+      max(12px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));display:grid;
+      grid-template-rows:auto auto minmax(520px,1fr) auto;gap:10px}
+    header,.controls,.footer{display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .eyebrow{font-size:11px;font-weight:900;letter-spacing:.14em;color:#b8c8d8}
+    h1{font-size:clamp(26px,4vw,44px);line-height:1;margin:7px 0 0;letter-spacing:-.04em}
+    .status{display:flex;align-items:center;gap:9px;color:#b4c5d5;font-size:15px;white-space:nowrap}
+    .dot{width:12px;height:12px;border-radius:50%;background:var(--warn);box-shadow:0 0 0 5px #ffd1661d}
+    .dot.good{background:var(--good);box-shadow:0 0 0 5px #64e08b1d}
+    .dot.bad{background:var(--bad);box-shadow:0 0 0 5px #ff6f771d}
+    .controls{justify-content:flex-start;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);
+      border-radius:16px;padding:10px 12px}
+    .control{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;font-weight:800}
+    select,button{height:44px;border:1px solid var(--line);background:var(--panel2);color:var(--text);
+      border-radius:11px;padding:0 13px;font-weight:800}
+    button{cursor:pointer}
+    .radar-wrap{position:relative;min-height:520px;border:1px solid var(--line);border-radius:18px;
+      overflow:hidden;background:radial-gradient(circle at center,#10283a 0,#0b1926 52%,#07111a 100%)}
+    #radar{width:100%;height:100%;display:block;min-height:520px;touch-action:manipulation}
+    .hud{position:absolute;left:12px;top:12px;display:flex;gap:8px;z-index:3;pointer-events:none}
+    .hud-card{min-width:91px;padding:9px 11px;border:1px solid #ffffff1e;background:#07111bd9;
+      border-radius:12px;backdrop-filter:blur(8px)}
+    .hud-card strong,.hud-card span{display:block}.hud-card strong{font-size:18px}.hud-card span{font-size:11px;color:var(--muted)}
+    .errorbox{position:absolute;left:12px;right:12px;bottom:12px;z-index:4;background:#38151acc;
+      border:1px solid #ff6f776b;border-radius:12px;padding:10px 12px;color:#ffd7da;font-size:12px;display:none}
+    .detail{position:absolute;right:12px;bottom:12px;z-index:5;width:min(360px,calc(100% - 24px));
+      background:#0d1824f2;border:1px solid var(--line);border-radius:16px;padding:16px;display:none;box-shadow:0 14px 38px #0008}
+    .detail h2{margin:4px 0 12px;font-size:26px}
+    .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+    .detail-grid div{background:var(--panel2);border:1px solid var(--line);padding:9px;border-radius:10px}
+    .detail-grid span,.detail-grid strong{display:block}.detail-grid span{font-size:10px;color:var(--muted);margin-bottom:3px}
+    .close{position:absolute;right:8px;top:8px;width:38px;padding:0;font-size:22px}
+    .footer{font-size:11px;color:var(--muted);padding:2px 4px}
+    .plane{cursor:pointer}
+    .plane-label{paint-order:stroke;stroke:#08111b;stroke-width:4px;stroke-linejoin:round;font-weight:800}
+    @media(max-width:700px){
+      header{align-items:flex-start}.status{font-size:13px}.app{grid-template-rows:auto auto minmax(580px,1fr) auto}
+      .radar-wrap,#radar{min-height:580px}.hud{right:12px;overflow:hidden}.hud-card{min-width:78px}
+      .footer{flex-direction:column;align-items:flex-start}.detail-grid{grid-template-columns:1fr 1fr}
+    }
+  </style>
 </head>
 <body>
-  <main class="app-shell">
-    <header class="topbar">
-      <div>
-        <div class="eyebrow">AVIATION LIVE TRAFFIC</div>
-        <h1 id="locationTitle">Alpena Area</h1>
-      </div>
-      <div class="status-wrap">
-        <span class="status-dot" id="statusDot"></span>
-        <span id="statusText">Connecting…</span>
-      </div>
-    </header>
+<main class="app">
+  <header>
+    <div><div class="eyebrow">AVIATION LIVE TRAFFIC</div><h1>Alpena Area</h1></div>
+    <div class="status"><span id="dot" class="dot"></span><span id="status">Connecting…</span></div>
+  </header>
 
-    <section class="controls" aria-label="Traffic controls">
-      <div class="control-group">
-        <label for="rangeSelect">Range</label>
-        <select id="rangeSelect">
-          <option value="25">25 NM</option>
-          <option value="50">50 NM</option>
-          <option value="100" selected>100 NM</option>
-          <option value="150">150 NM</option>
-          <option value="200">200 NM</option>
-          <option value="250">250 NM</option>
-        </select>
-      </div>
+  <section class="controls">
+    <label class="control">Range
+      <select id="range">
+        <option value="25">25 NM</option><option value="50">50 NM</option>
+        <option value="100" selected>100 NM</option><option value="150">150 NM</option>
+        <option value="200">200 NM</option><option value="250">250 NM</option>
+      </select>
+    </label>
+    <label class="control">Labels
+      <select id="labels">
+        <option value="callsign" selected>Callsign</option><option value="altitude">Altitude</option>
+        <option value="both">Both</option><option value="none">None</option>
+      </select>
+    </label>
+    <button id="refresh" type="button">Refresh now</button>
+  </section>
 
-      <div class="control-group">
-        <label for="labelSelect">Labels</label>
-        <select id="labelSelect">
-          <option value="callsign" selected>Callsign</option>
-          <option value="altitude">Altitude</option>
-          <option value="both">Both</option>
-          <option value="none">None</option>
-        </select>
-      </div>
+  <section class="radar-wrap">
+    <svg id="radar" viewBox="0 0 1000 700" role="img" aria-label="Live aircraft radar centered on Alpena">
+      <defs>
+        <filter id="glow"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      </defs>
+      <g id="grid"></g>
+      <g id="planes"></g>
+    </svg>
 
-      <label class="switch-control">
-        <input type="checkbox" id="trailToggle">
-        <span>Trails</span>
-      </label>
+    <div class="hud">
+      <div class="hud-card"><strong id="count">—</strong><span>aircraft</span></div>
+      <div class="hud-card"><strong id="rangeHud">100</strong><span>NM range</span></div>
+      <div class="hud-card"><strong id="updated">—</strong><span>updated</span></div>
+    </div>
 
-      <button id="recenterBtn" type="button">Recenter</button>
-    </section>
+    <div id="errorbox" class="errorbox"></div>
 
-    <section class="map-wrap">
-      <div id="map" aria-label="Live aircraft map"></div>
-      <div class="hud">
-        <div><strong id="aircraftCount">—</strong><span>aircraft</span></div>
-        <div><strong id="rangeHud">100</strong><span>NM range</span></div>
-        <div><strong id="updatedHud">—</strong><span>updated</span></div>
-      </div>
-    </section>
-
-    <aside class="detail-card" id="detailCard" hidden>
-      <button class="detail-close" id="detailClose" type="button" aria-label="Close aircraft details">×</button>
+    <aside id="detail" class="detail">
+      <button id="close" class="close" type="button" aria-label="Close">×</button>
       <div class="eyebrow">SELECTED AIRCRAFT</div>
-      <h2 id="detailTitle">—</h2>
+      <h2 id="dtitle">—</h2>
       <div class="detail-grid">
-        <div><span>Registration</span><strong id="detailReg">—</strong></div>
-        <div><span>Type</span><strong id="detailType">—</strong></div>
-        <div><span>Altitude</span><strong id="detailAlt">—</strong></div>
-        <div><span>Groundspeed</span><strong id="detailGs">—</strong></div>
-        <div><span>Track</span><strong id="detailTrack">—</strong></div>
-        <div><span>Vertical rate</span><strong id="detailVr">—</strong></div>
+        <div><span>REGISTRATION</span><strong id="dreg">—</strong></div>
+        <div><span>TYPE</span><strong id="dtype">—</strong></div>
+        <div><span>ALTITUDE</span><strong id="dalt">—</strong></div>
+        <div><span>GROUND SPEED</span><strong id="dgs">—</strong></div>
+        <div><span>TRACK</span><strong id="dtrack">—</strong></div>
+        <div><span>VERTICAL RATE</span><strong id="dvr">—</strong></div>
       </div>
     </aside>
+  </section>
 
-    <footer class="footer">
-      <span>Data: ADSB.lol</span>
-      <span>For informational/enthusiast use only</span>
-    </footer>
-  </main>
+  <footer class="footer">
+    <span id="sourceFoot">Live community ADS-B data</span>
+    <span>Home/office/hangar enthusiast display — not for navigation or collision avoidance</span>
+  </footer>
+</main>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-  <script type="module" src="/app.js"></script>
+<script>
+(() => {
+  "use strict";
+
+  const CENTER = { lat: 45.0781, lon: -83.5603 };
+  const POLL_MS = 15000;
+  const SVG_NS = "http://www.w3.org/2000/svg";
+
+  const sources = [
+    {
+      name: "Airplanes.live",
+      url: (lat, lon, r) => `https://api.airplanes.live/v2/point/${lat}/${lon}/${r}`,
+      rows: d => Array.isArray(d.ac) ? d.ac : []
+    },
+    {
+      name: "ADSB.lol",
+      url: (lat, lon, r) => `https://api.adsb.lol/v2/point/${lat}/${lon}/${r}`,
+      rows: d => Array.isArray(d.ac) ? d.ac : []
+    },
+    {
+      name: "adsb.fi",
+      url: (lat, lon, r) => `https://opendata.adsb.fi/api/v3/lat/${lat}/lon/${lon}/dist/${r}`,
+      rows: d => Array.isArray(d.ac) ? d.ac : (Array.isArray(d.aircraft) ? d.aircraft : [])
+    }
+  ];
+
+  const el = id => document.getElementById(id);
+  const radar = el("radar");
+  const grid = el("grid");
+  const planes = el("planes");
+  const rangeSel = el("range");
+  const labelsSel = el("labels");
+  const statusEl = el("status");
+  const dot = el("dot");
+  const errorbox = el("errorbox");
+  const detail = el("detail");
+
+  let lastAircraft = [];
+  let timer = null;
+  let fetching = false;
+
+  function svg(tag, attrs = {}, text = null) {
+    const n = document.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
+    if (text !== null) n.textContent = text;
+    return n;
+  }
+
+  function setStatus(kind, text) {
+    dot.className = "dot" + (kind ? " " + kind : "");
+    statusEl.textContent = text;
+  }
+
+  function escText(v) {
+    return v == null || v === "" ? "—" : String(v);
+  }
+
+  function callsign(a) {
+    const f = typeof a.flight === "string" ? a.flight.trim() : "";
+    return f || a.r || (a.hex ? a.hex.toUpperCase() : "UNKNOWN");
+  }
+
+  function altitude(a) {
+    if (a.alt_baro === "ground") return "GROUND";
+    const n = Number(a.alt_baro ?? a.alt_geom);
+    return Number.isFinite(n) ? `${Math.round(n).toLocaleString()} ft` : "—";
+  }
+
+  function haversineNm(lat1, lon1, lat2, lon2) {
+    const R = 3440.065;
+    const toRad = d => d * Math.PI / 180;
+    const p1 = toRad(lat1), p2 = toRad(lat2);
+    const dp = toRad(lat2 - lat1), dl = toRad(lon2 - lon1);
+    const h = Math.sin(dp/2)**2 + Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+
+  function bearingDeg(lat1, lon1, lat2, lon2) {
+    const toRad = d => d * Math.PI / 180;
+    const toDeg = r => r * 180 / Math.PI;
+    const p1 = toRad(lat1), p2 = toRad(lat2), dl = toRad(lon2 - lon1);
+    const y = Math.sin(dl) * Math.cos(p2);
+    const x = Math.cos(p1)*Math.sin(p2) - Math.sin(p1)*Math.cos(p2)*Math.cos(dl);
+    return (toDeg(Math.atan2(y, x)) + 360) % 360;
+  }
+
+  function normalize(a) {
+    const lat = Number(a.lat), lon = Number(a.lon);
+    return {
+      ...a,
+      lat: Number.isFinite(lat) ? lat : null,
+      lon: Number.isFinite(lon) ? lon : null
+    };
+  }
+
+  function drawGrid() {
+    grid.replaceChildren();
+    const cx = 500, cy = 350, r = 300;
+    const range = Number(rangeSel.value) || 100;
+
+    grid.append(svg("line",{x1:cx-r,y1:cy,x2:cx+r,y2:cy,stroke:"#2b475d","stroke-width":"1"}));
+    grid.append(svg("line",{x1:cx,y1:cy-r,x2:cx,y2:cy+r,stroke:"#2b475d","stroke-width":"1"}));
+
+    [0.25,0.5,0.75,1].forEach((f,i)=>{
+      grid.append(svg("circle",{cx,cy,r:r*f,fill:"none",stroke:i===3?"#4b718c":"#36536c","stroke-width":i===3?"2":"1.2"}));
+      const lab = `${Math.round(range*f)} NM`;
+      grid.append(svg("text",{x:cx+8,y:cy-r*f+16,fill:"#708aa0","font-size":"13","font-weight":"700"},lab));
+    });
+
+    for(let deg=0;deg<360;deg+=30){
+      const a=(deg-90)*Math.PI/180;
+      const x1=cx+Math.cos(a)*(r-8), y1=cy+Math.sin(a)*(r-8);
+      const x2=cx+Math.cos(a)*r, y2=cy+Math.sin(a)*r;
+      grid.append(svg("line",{x1,y1,x2,y2,stroke:"#4b718c","stroke-width":"1.5"}));
+    }
+
+    const card = [{t:"N",x:cx,y:cy-r-18},{t:"E",x:cx+r+20,y:cy+5},{t:"S",x:cx,y:cy+r+30},{t:"W",x:cx-r-22,y:cy+5}];
+    card.forEach(c=>grid.append(svg("text",{x:c.x,y:c.y,fill:"#b6c9d8","font-size":"15","font-weight":"900","text-anchor":"middle"},c.t)));
+
+    grid.append(svg("circle",{cx,cy,r:4,fill:"#70d6ff",filter:"url(#glow)"}));
+    grid.append(svg("text",{x:cx+10,y:cy-10,fill:"#9eb9cb","font-size":"12","font-weight":"800"},"KAPN"));
+  }
+
+  function labelFor(a) {
+    const mode = labelsSel.value;
+    if (mode === "none") return "";
+    if (mode === "altitude") return altitude(a).replace(" ft","");
+    if (mode === "both") return `${callsign(a)} · ${altitude(a).replace(" ft","")}`;
+    return callsign(a);
+  }
+
+  function showDetail(a) {
+    el("dtitle").textContent = callsign(a);
+    el("dreg").textContent = escText(a.r);
+    el("dtype").textContent = escText(a.t);
+    el("dalt").textContent = altitude(a);
+    const gs = Number(a.gs);
+    el("dgs").textContent = Number.isFinite(gs) ? `${Math.round(gs)} kt` : "—";
+    const tr = Number(a.track);
+    el("dtrack").textContent = Number.isFinite(tr) ? `${Math.round(tr)}°` : "—";
+    const vr = Number(a.baro_rate ?? a.geom_rate);
+    el("dvr").textContent = Number.isFinite(vr) ? `${Math.round(vr)} fpm` : "—";
+    detail.style.display = "block";
+  }
+
+  function drawPlanes(list) {
+    planes.replaceChildren();
+    const cx=500, cy=350, rr=300, maxNm=Number(rangeSel.value)||100;
+    let shown=0;
+
+    for(const a0 of list){
+      const a=normalize(a0);
+      if(!Number.isFinite(a.lat)||!Number.isFinite(a.lon)) continue;
+      const d=haversineNm(CENTER.lat,CENTER.lon,a.lat,a.lon);
+      if(d>maxNm) continue;
+      const b=bearingDeg(CENTER.lat,CENTER.lon,a.lat,a.lon);
+      const ang=(b-90)*Math.PI/180;
+      const pr=(d/maxNm)*rr;
+      const x=cx+Math.cos(ang)*pr, y=cy+Math.sin(ang)*pr;
+      const track=Number(a.track);
+      const rot=Number.isFinite(track)?track:0;
+
+      const g=svg("g",{class:"plane",transform:`translate(${x.toFixed(1)} ${y.toFixed(1)})`,"data-hex":a.hex||""});
+      const p=svg("path",{
+        d:"M 0 -11 L 3 -2 L 12 2 L 12 5 L 3 4 L 2 10 L 6 13 L 6 15 L 0 13 L -6 15 L -6 13 L -2 10 L -3 4 L -12 5 L -12 2 L -3 -2 Z",
+        fill:"#f8fbff",stroke:"#08111b","stroke-width":"1.5",
+        transform:`rotate(${rot})`,filter:"url(#glow)"
+      });
+      g.append(p);
+
+      const lab=labelFor(a);
+      if(lab){
+        g.append(svg("text",{x:15,y:-9,fill:"#f4f7fb","font-size":"12",class:"plane-label"},lab));
+      }
+      g.addEventListener("click",()=>showDetail(a));
+      planes.append(g);
+      shown++;
+    }
+
+    el("count").textContent=String(shown);
+  }
+
+  async function fetchWithTimeout(url, ms=6000) {
+    const controller = new AbortController();
+    const t = setTimeout(()=>controller.abort(),ms);
+    try {
+      return await fetch(url,{cache:"no-store",mode:"cors",signal:controller.signal,referrerPolicy:"no-referrer"});
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  async function loadTraffic() {
+    if(fetching) return;
+    fetching=true;
+    setStatus("","Updating…");
+    errorbox.style.display="none";
+    const range=Number(rangeSel.value)||100;
+    el("rangeHud").textContent=String(range);
+    const errors=[];
+
+    try{
+      for(const source of sources){
+        try{
+          const res=await fetchWithTimeout(source.url(CENTER.lat,CENTER.lon,range));
+          if(!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data=await res.json();
+          const rows=source.rows(data);
+          if(!Array.isArray(rows)) throw new Error("unexpected response");
+          lastAircraft=rows;
+          drawPlanes(rows);
+          el("updated").textContent=new Date().toLocaleTimeString([],{hour:"numeric",minute:"2-digit",second:"2-digit"});
+          el("sourceFoot").textContent=`Data: ${source.name}`;
+          setStatus("good",`Live · ${source.name}`);
+          return;
+        }catch(err){
+          errors.push(`${source.name}: ${err && err.message ? err.message : String(err)}`);
+        }
+      }
+
+      setStatus("bad","Feed unavailable");
+      el("count").textContent="—";
+      errorbox.textContent="Could not reach any free ADS-B source from this browser. " + errors.join(" | ");
+      errorbox.style.display="block";
+    } finally {
+      fetching=false;
+    }
+  }
+
+  function restart(){
+    clearInterval(timer);
+    drawGrid();
+    drawPlanes(lastAircraft);
+    loadTraffic();
+    timer=setInterval(loadTraffic,POLL_MS);
+  }
+
+  rangeSel.addEventListener("change",restart);
+  labelsSel.addEventListener("change",()=>drawPlanes(lastAircraft));
+  el("refresh").addEventListener("click",loadTraffic);
+  el("close").addEventListener("click",()=>detail.style.display="none");
+  document.addEventListener("visibilitychange",()=>{
+    if(document.hidden) clearInterval(timer); else restart();
+  });
+
+  drawGrid();
+  restart();
+})();
+</script>
 </body>
 </html>
